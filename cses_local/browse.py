@@ -3,7 +3,6 @@
 # Browsing-related logic.
 
 
-import json
 import os
 import sys
 import readchar as rch
