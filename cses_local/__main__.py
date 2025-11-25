@@ -5,7 +5,7 @@
 import sys
 import argparse
 import cses_local.args as args
-import cses_local.data_setup as data_setup
+import cses_local.data as data
 import cses_local.browse as browse
 import cses_local.submit as submit
 
@@ -20,7 +20,7 @@ def main() -> None:
         w32con.SetConsoleCP(65001)
 
     # Ensure problem-set data exists.
-    data_setup.setup()
+    data.setup()
 
     if len(sys.argv) == 1:
         args_parser.print_help()
@@ -33,7 +33,7 @@ def main() -> None:
         case "browse":
             browse.browse(index=arguments.problem)
         case "submit":
-            submit.submit(index=arguments.problem, file=arguments.file)
+            submit.submit(index=arguments.problem, file=arguments.file, online=arguments.online)
 
 
 if __name__ == "__main__":

@@ -52,6 +52,11 @@ def _add_subparsers(parser: args.ArgumentParser) -> None:
         type=str,
         help="Path to file to be submitted.",
     )
+    parser_submit.add_argument(
+        "--online", "-o",
+        action="store_true",
+        help="Submit online",
+    )
 
     # Browse command.
     parser_browse = subparsers.add_parser(

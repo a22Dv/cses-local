@@ -2,23 +2,23 @@
 #
 # Data setup and handling logic.
 
-from typing import Any, Iterator, List, Dict
-
 import time
 import re
-import pathlib as path
+from pathlib import Path
 import requests as req
 import bs4
 import json
 
-ROOT_DIR: path.Path = path.Path(__file__).resolve().parent
-DATA_ROOT: path.Path = ROOT_DIR / "data"
-DATA_IO: path.Path = DATA_ROOT / "io"
-MANIFEST: path.Path = DATA_ROOT / "manifest.json"
+from typing import Any, Iterator, List, Dict
 
-ROOT: str = "https://cses.fi/problemset/"
-DELAY: float = 1.0
-KATEX_REPLACEMENTS: Dict[str, str] = {
+ROOT_DIR: Path = Path(__file__).resolve().parent
+DATA_ROOT: Path = ROOT_DIR / "data"
+DATA_IO: Path = DATA_ROOT / "io"
+MANIFEST: Path = DATA_ROOT / "manifest.json"
+ROOT_URL: str = "https://cses.fi/problemset/"
+
+_DELAY: float = 1.0
+_KATEX_REPLACEMENTS: Dict[str, str] = {
     "\\le": "≤",
     "\\ge": "≥",
     "\\lt": "<",
@@ -50,7 +50,7 @@ KATEX_REPLACEMENTS: Dict[str, str] = {
     "\\pmod": "mod",
 }
 
-KATEX_REGEX_REPLACEMENTS: Dict[re.Pattern[str], str] = {
+_KATEX_REGEX_REPLACEMENTS: Dict[re.Pattern[str], str] = {
     re.compile(r"\\frac{(.*?)}{(.*?)}"): r"(\1)/(\2)",
     re.compile(r"\\text{(.*?)}"): r"\1 ",
     re.compile(r"\\binom{(.*?)}{(.*?)}"): r"((\1), (\2))",
@@ -59,24 +59,53 @@ KATEX_REGEX_REPLACEMENTS: Dict[re.Pattern[str], str] = {
 }
 
 
-PNUM_PATTERN: re.Pattern = re.compile(r"^/problemset/task/(\d+)$")
-URL_PATTERN: re.Pattern = re.compile(r"^/problemset/task/\d+$")
+_PNUM_PATTERN: re.Pattern = re.compile(r"^/problemset/task/(\d+)$")
+_URL_PATTERN: re.Pattern = re.compile(r"^/problemset/task/\d+$")
 
-HEADER_HOME: Dict[str, str] = {
+_HEADER_HOME: Dict[str, str] = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:145.0) Gecko/20100101 Firefox/145.0",
     "Referer": "https://cses.fi/problemset/list/",
 }
-DOWNLOAD_DESC_STR: str = "Downloading problem description..."
-DOWNLOAD_TEST_STR: str = "Downloading tests..."
-DONE_STR: str = "Done."
-WIDTH: int = len(
+_DOWNLOAD_DESC_STR: str = "Downloading problem description..."
+_DOWNLOAD_TEST_STR: str = "Downloading tests..."
+_DONE_STR: str = "Done."
+_WIDTH: int = len(
     max(
-        [DOWNLOAD_DESC_STR, DOWNLOAD_TEST_STR, DONE_STR],
+        [_DOWNLOAD_DESC_STR, _DOWNLOAD_TEST_STR, _DONE_STR],
         key=lambda v: len(v),
     )
 )
 
-PROGRESS_STR: str = "This might take a while... [{index}/{total}] {comment:<{width}}"
+_PROGRESS_STR: str = "This might take a while... [{index}/{total}] {comment:<{width}}"
+
+
+def load_manifest() -> List[Dict[str, Any]]:
+    manifest: List[Dict[str, Any]] = []
+    with open(MANIFEST, "r", encoding="utf-8") as manifest_file:
+        manifest = json.load(manifest_file)
+    return manifest
+
+
+def get_index(user_input: str, manifest: List[Dict[str, Any]]) -> int:
+    entry_index: int = 0
+    if user_input.isdigit():
+        search_term_i: int = int(user_input)
+        if 1 <= search_term_i <= len(manifest):
+            # Index in [1 -> len()]. NOT a problem number.
+            entry_index = search_term_i - 1
+        else:
+            for i, entry in enumerate(manifest):  # Index is a problem number.
+                if entry["problem_number"] == search_term_i:
+                    entry_index = i
+                    break
+    else:
+        for i, entry in enumerate(manifest):  # String-search.
+            search_term_s: str = user_input.strip().replace("_", " ").lower()
+            search_entry: str = entry["title"].strip().lower()
+            if search_term_s == search_entry:
+                entry_index = i
+                break
+    return entry_index
 
 
 def setup() -> bool:
@@ -125,33 +154,33 @@ def _download_data():
 
         session.cookies.update({"PHPSESSID": cookie})
 
-        response: req.Response = session.get(ROOT)
+        response: req.Response = session.get(ROOT_URL)
         response.raise_for_status()
 
         html: str = response.text
         bs = bs4.BeautifulSoup(html, "html.parser")
-        anchor_tags: bs4.ResultSet[bs4.Tag] = bs.find_all("a", href=URL_PATTERN)
+        anchor_tags: bs4.ResultSet[bs4.Tag] = bs.find_all("a", href=_URL_PATTERN)
 
         tasks_data: List[Dict[str, Any]] = []
 
         for i, a_tag in enumerate(anchor_tags, 1):
-            session.headers.update(HEADER_HOME)  # Reset headers.
+            session.headers.update(_HEADER_HOME)  # Reset headers.
 
             link: str | Any = a_tag["href"]
-            task_link = "".join((ROOT, link.removeprefix("/problemset/")))
+            task_link = "".join((ROOT_URL, link.removeprefix("/problemset/")))
             tests_link = "".join((task_link.replace("task", "tests", 1)))
 
-            matched = PNUM_PATTERN.match(link)
+            matched = _PNUM_PATTERN.match(link)
             if not matched:
                 continue
             problem_number = int(matched.group(1))
 
             print(
-                PROGRESS_STR.format(
+                _PROGRESS_STR.format(
                     index=i,
                     total=len(anchor_tags),
-                    comment=DOWNLOAD_DESC_STR,
-                    width=WIDTH,
+                    comment=_DOWNLOAD_DESC_STR,
+                    width=_WIDTH,
                 ),
                 end="\r",
             )
@@ -159,11 +188,11 @@ def _download_data():
             task_data: Dict[str, Any] | None = _download_task_data(task)
 
             print(
-                PROGRESS_STR.format(
+                _PROGRESS_STR.format(
                     index=i,
                     total=len(anchor_tags),
-                    comment=DOWNLOAD_TEST_STR,
-                    width=WIDTH,
+                    comment=_DOWNLOAD_TEST_STR,
+                    width=_WIDTH,
                 ),
                 end="\r",
             )
@@ -181,11 +210,11 @@ def _download_data():
                 io_file.write(test_data)
 
             print(
-                PROGRESS_STR.format(
+                _PROGRESS_STR.format(
                     index=i,
                     total=len(anchor_tags),
-                    comment=DONE_STR,
-                    width=WIDTH,
+                    comment=_DONE_STR,
+                    width=_WIDTH,
                 ),
                 end="\r",
             )
@@ -199,7 +228,7 @@ def _get_with_delay(session: req.Session, url: str) -> req.Response:
     Adds a delay controlled by the DELAY global variable.
     """
     response: req.Response = session.get(url)
-    time.sleep(DELAY)
+    time.sleep(_DELAY)
     response.raise_for_status()
     return response
 
@@ -243,8 +272,8 @@ def _extract_katex(parent: bs4.Tag | str) -> str:
     """
     Extracts the KaTeX math embedded in a given tag.
     """
-    replacements: Dict[str, str] = KATEX_REPLACEMENTS
-    regex_replacements: Dict[re.Pattern[str], str] = KATEX_REGEX_REPLACEMENTS
+    replacements: Dict[str, str] = _KATEX_REPLACEMENTS
+    regex_replacements: Dict[re.Pattern[str], str] = _KATEX_REGEX_REPLACEMENTS
 
     pattern: re.Pattern = re.compile(
         "|".join((re.escape(r) for r in replacements.keys()))
@@ -297,7 +326,7 @@ def _download_test_data(
     Downloads the in/out files for the given problem set.
     This function modifies the session header.
     """
-    header: Dict[str, str] = HEADER_HOME
+    header: Dict[str, str] = _HEADER_HOME
     header["referer"] = url
     session.headers.update(header)
 

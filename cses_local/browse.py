@@ -2,14 +2,16 @@
 #
 # Browsing-related logic.
 
-from typing import List, Dict, Any
-from cses_local.data_setup import MANIFEST
+
 import json
 import os
 import sys
 import readchar as rch
-from readchar import key as rchkey
 import colorama as clr
+import cses_local.data as data
+
+from typing import List, Dict, Any
+from readchar import key as rchkey
 
 UNDERLINE = lambda string: f"\x1b[4m{string}\x1b[24m"
 FAINT = lambda string: f"{string}"
@@ -26,6 +28,8 @@ FORMATTING: Dict[str, str] = {
 }
 
 
+# TODO:
+# Support "previous" index.
 def browse(index: str | None) -> None:
     """
     Browse local problem definitions.
@@ -33,13 +37,10 @@ def browse(index: str | None) -> None:
 
     clr.init()
 
-    manifest: List[Dict[str, Any]] = []
-    with open(MANIFEST, "r", encoding="utf-8") as manifest_file:
-        manifest = json.load(manifest_file)
+    manifest: List[Dict[str, Any]] = data.load_manifest()
+    entry_index: int = data.get_index(index, manifest) if index else 0
 
-    entry_index: int = get_index(index, manifest) if index else 0
-
-    while True and clear() == 0:
+    while True and _clear() == 0:
 
         entry: Dict[str, Any] = manifest[entry_index]
         header: str = (
@@ -69,46 +70,23 @@ def browse(index: str | None) -> None:
             case rchkey.UP | rchkey.LEFT | "w" | "a":
                 entry_index -= 1
             case "q" | rchkey.CTRL_C:
-                clear()
+                _clear()
                 exit(0)
             case "j":
-                entry_index = jump_to(manifest)
+                entry_index = _jump_to(manifest)
         if entry_index < 0:
             entry_index = len(manifest) - 1
         entry_index %= len(manifest)
 
 
-def jump_to(manifest: List[Dict[str, Any]]) -> int:
+def _jump_to(manifest: List[Dict[str, Any]]) -> int:
     """
     Returns the index the user wants to jump to.
     """
-    clear()
+    _clear()
     user_input: str = input("Jump to problem: ")
-    return get_index(user_input, manifest)
+    return data.get_index(user_input, manifest)
 
 
-def get_index(user_input: str, manifest: List[Dict[str, Any]]) -> int:
-    entry_index: int = 0
-    if user_input.isdigit():
-        search_term_i: int = int(user_input)
-        if (
-            1 <= search_term_i <= len(manifest)
-        ):  # Index in [1 -> len()]. NOT a problem number.
-            entry_index = search_term_i - 1
-        else:
-            for i, entry in enumerate(manifest):  # Index is a problem number.
-                if entry["problem_number"] == search_term_i:
-                    entry_index = i
-                    break
-    else:
-        for i, entry in enumerate(manifest):  # String-search.
-            search_term_s: str = user_input.strip().replace("_", " ").lower()
-            search_entry: str = entry["title"].strip().lower()
-            if search_term_s == search_entry:
-                entry_index = i
-                break
-    return entry_index
-
-
-def clear() -> int:
+def _clear() -> int:
     return os.system("cls" if sys.platform.startswith("win") else "clear")

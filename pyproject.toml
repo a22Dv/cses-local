@@ -12,7 +12,8 @@ dependencies = [
   "beautifulsoup4",
   "requests",
   "pywin32",
-  "readchar"
+  "readchar",
+  "psutil"
 ]
 
 [project.scripts]
