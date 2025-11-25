@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cses_local"
+version = "0.0.1"
+description = "An offline test-runner and grading utility specifically for the CSES Problem Set."
+requires-python = ">=3.8"
+dependencies = [
+  "colorama",
+  "beautifulsoup4",
+  "requests",
+  "pywin32",
+  "readchar"
+]
+
+[project.scripts]
+cses = "cses_local.__main__:main"
