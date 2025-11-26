@@ -1,7 +1,7 @@
 # utils.py
 #
 # Project-wide utilities. Implementation of Utilities class.
-# 
+#
 
 import os
 
@@ -75,3 +75,11 @@ def clear_console() -> int:
         if os.name == _WIN_NAME
         else _POSIX_CLEAR_CONSOLE_COMMAND  # os.name == "posix"
     )
+
+
+def quit() -> None:
+    """
+    Terminates the program.
+    """
+    clear_console()
+    exit(0)

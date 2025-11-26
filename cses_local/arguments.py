@@ -3,11 +3,12 @@
 # Definition for Arguments class.
 # Handles program arguments.
 #
-# NOTE: Previous is not implemented for commands.
+# NOTE: "previous" option is currently not implemented for commands.
 
 import argparse as ap
 
 type Parser = ap.ArgumentParser
+type ArgumentNamespace = ap.Namespace
 type _Subparser = ap._SubParsersAction[ap.ArgumentParser]
 
 
@@ -23,6 +24,18 @@ class Arguments:
             if prefix is None:
                 prefix = "Usage: "
             return super().add_usage(usage, actions, groups, prefix)
+
+    @classmethod
+    def parse(cls, argparser: Parser | None) -> ArgumentNamespace:
+        """
+        Returns the given arguments in an argument namespace.
+        Handles parser creation.
+
+        :return: Argument namespace. Holds given arguments.
+        """
+        
+        parser_obj: Parser = argparser if argparser else cls.parser()
+        return parser_obj.parse_args()
 
     @classmethod
     def parser(cls) -> Parser:

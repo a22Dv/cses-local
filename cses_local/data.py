@@ -9,6 +9,9 @@ import requests as req
 import bs4
 import json
 
+type ManifestEntry = Dict[str, Any]
+type Manifest = List[ManifestEntry]
+
 from typing import Any, Iterator, List, Dict
 
 ROOT_DIR: Path = Path(__file__).resolve().parent
