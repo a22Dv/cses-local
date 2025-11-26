@@ -85,7 +85,3 @@ def _jump_to(manifest: List[Dict[str, Any]]) -> int:
     _clear()
     user_input: str = input("Jump to problem: ")
     return data.get_index(user_input, manifest)
-
-
-def _clear() -> int:
-    return os.system("cls" if sys.platform.startswith("win") else "clear")
