@@ -14,9 +14,9 @@ from cses_local.data import Manifest, ManifestEntry
 from readchar import key as rchkey
 
 # Configuration-dependent. Formatted here
-# instead of modifying the source as the data isn't
-# readily available and the original should be preserved.
-_FORMATTING: Dict[str, str] = {  
+# instead of modifying the source as the problem description data isn't
+# readily available to download and the original format should be preserved.
+_FORMATTING: Dict[str, str] = {
     "\n\n": "\n",
     "Constraints\n": "Constraints:\n",
     "Input:": "Input",
@@ -38,7 +38,7 @@ def browse(index: str | None) -> None:
     manifest: Manifest = data.load_manifest()
     entry_index: int = data.get_index(index, manifest) if index else 0
 
-    while True and utils.clear_console() == 0:
+    while utils.clear_console() == 0:  # Event loop. Always true unless system() fails.
 
         entry: ManifestEntry = manifest[entry_index]
 
@@ -52,7 +52,7 @@ def _display(entry: ManifestEntry, entry_index: int) -> None:
     """
     Formats and displays the specified entry accordingly.
     Helper function to browse().
-    
+
     :param entry: Specified entry in manifest.
     :param entry_index: Specified entry's index in manifest.
     """
@@ -60,7 +60,7 @@ def _display(entry: ManifestEntry, entry_index: int) -> None:
     for search, replacement in _FORMATTING.items():
         description = description.replace(search, replacement)
 
-    dei: int = entry_index + 1 # Display index. + 1 as it is 0-indexed.
+    dei: int = entry_index + 1  # Display index. + 1 as it is 0-indexed.
     pnum: int = entry["problem_number"]
     memory_limit: str = entry["memory_limit"]
     time_limit: str = entry["time_limit"]
@@ -70,14 +70,14 @@ def _display(entry: ManifestEntry, entry_index: int) -> None:
     fmt_limits: str = _LIMITS_FMT.format(tl=time_limit, ml=memory_limit)
 
     print(utils.underline(fmt_header))
-    print(utils.underline(fmt_limits), end="\n\n")  # Extra \n to separate header.
+    print(utils.underline(fmt_limits), end="\n\n")  # Extra \n to separate description.
     print(utils.faint(description))
 
 
 def _handle_input(key: str, cidx: int, manifest: Manifest) -> int:
     """
     Handles the appropriate action given
-    the user's input. 
+    the user's input.
     Helper function to browse().
 
     :param key: User input key.
@@ -111,4 +111,3 @@ def _jump_to(manifest: List[ManifestEntry]) -> int:
     utils.clear_console()
     user_input: str = input("Jump to Problem: ")
     return data.get_index(user_input, manifest)
-

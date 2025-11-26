@@ -1,27 +1,89 @@
 # data_setup.py
 #
 # Data setup and handling logic.
+#
+# TODO:
+# Implement directory hashing and comparing support
+# to keep track of possibly corrupted testcases
+# and desynchronized manifest.
 
 import time
 import re
-from pathlib import Path
 import requests as req
 import bs4
 import json
 
+from pathlib import Path
+from re import Pattern, Match
+from typing import Any, Iterator, List, Dict, Tuple
+
 type ManifestEntry = Dict[str, Any]
 type Manifest = List[ManifestEntry]
+type RegexReplacements = Dict[Pattern[str], str]
+type RequestHeader = Dict[str, str]
+type StringReplacements = Dict[str, str]
+type Session = req.Session
+type Response = req.Response
+type HTMLParser = bs4.BeautifulSoup
+type HTMLTags = bs4.ResultSet[bs4.Tag]
+type HTMLTag = bs4.Tag
+type RequestPayload = Dict[str, str]
 
-from typing import Any, Iterator, List, Dict
+# -------------------------------- Data paths -------------------------------- #
 
 ROOT_DIR: Path = Path(__file__).resolve().parent
+ROOT_URL: str = "https://cses.fi/problemset/"
+
 DATA_ROOT: Path = ROOT_DIR / "data"
 DATA_IO: Path = DATA_ROOT / "io"
 MANIFEST: Path = DATA_ROOT / "manifest.json"
-ROOT_URL: str = "https://cses.fi/problemset/"
 
-_DELAY: float = 1.0
-_KATEX_REPLACEMENTS: Dict[str, str] = {
+# ------------------------------- Manifest keys ------------------------------ #
+
+MANIFEST_TIME_LIMIT: str = "time_limit"
+MANIFEST_MEMORY_LIMIT: str = "memory_limit"
+MANIFEST_TITLE: str = "title"
+MANIFEST_DESCRIPTION: str = "description"
+MANIFEST_PROBLEM_NUMBER = "problem_number"
+
+# ------------------------------ Implementation ------------------------------ #
+
+_REQUEST_DELAY: float = 1.0
+
+_PNUM_PATTERN: Pattern = re.compile(r"^/problemset/task/(\d+)$")
+_URL_PATTERN: Pattern = re.compile(r"^/problemset/task/\d+$")
+_MATRIX_PATTERN: Pattern = re.compile(
+    r"\\begin{matrix}\s*(.*?)\s*\\end{matrix}", re.DOTALL
+)
+
+_HEADER_HOME: RequestHeader = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:145.0) Gecko/20100101 Firefox/145.0",
+    "Referer": "https://cses.fi/problemset/list/",
+}
+
+_INSTALLATION_PROMPT_STR: str = (
+    "It looks like the data for the problem sets cannot be found...\n"
+    "Would you like to start the installation? [Y/N]: "
+)
+_DOWNLOAD_INSTRUCTIONS_STR: str = (
+    "Downloading test data requires the downloader to be logged in.\n"
+    "To find your PHPSESSID,\n"
+    "1. Log into cses.fi.\n"
+    "2. Go to Inspect\n"
+    "3. Click the Application/Storage tab.\n"
+    "4. Expand the cookies tab\n"
+    "5. Look for PHPSESSID and copy the value.\n"
+    "6. Paste the value here.\n"
+)
+
+_DOWNLOAD_DESC_STR: str = "Downloading problem description..."
+_DOWNLOAD_TEST_STR: str = "Downloading tests..."
+_DONE_STR: str = "Done."
+_LDISP_WIDTH: int = len(_DOWNLOAD_DESC_STR)  # Longest string.
+
+_PROGRESS_STR: str = "This might take a while... [{index}/{total}] {comment:<{width}}"
+
+_KATEX_REPLACEMENTS: StringReplacements = {
     "\\le": "≤",
     "\\ge": "≥",
     "\\lt": "<",
@@ -53,7 +115,7 @@ _KATEX_REPLACEMENTS: Dict[str, str] = {
     "\\pmod": "mod",
 }
 
-_KATEX_REGEX_REPLACEMENTS: Dict[re.Pattern[str], str] = {
+_KATEX_REGEX_REPLACEMENTS: RegexReplacements = {
     re.compile(r"\\frac{(.*?)}{(.*?)}"): r"(\1)/(\2)",
     re.compile(r"\\text{(.*?)}"): r"\1 ",
     re.compile(r"\\binom{(.*?)}{(.*?)}"): r"((\1), (\2))",
@@ -61,189 +123,317 @@ _KATEX_REGEX_REPLACEMENTS: Dict[re.Pattern[str], str] = {
     re.compile(r"\\mathrm{(.*?)}"): r"\1",
 }
 
-
-_PNUM_PATTERN: re.Pattern = re.compile(r"^/problemset/task/(\d+)$")
-_URL_PATTERN: re.Pattern = re.compile(r"^/problemset/task/\d+$")
-
-_HEADER_HOME: Dict[str, str] = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:145.0) Gecko/20100101 Firefox/145.0",
-    "Referer": "https://cses.fi/problemset/list/",
-}
-_DOWNLOAD_DESC_STR: str = "Downloading problem description..."
-_DOWNLOAD_TEST_STR: str = "Downloading tests..."
-_DONE_STR: str = "Done."
-_WIDTH: int = len(
-    max(
-        [_DOWNLOAD_DESC_STR, _DOWNLOAD_TEST_STR, _DONE_STR],
-        key=lambda v: len(v),
-    )
-)
-
-_PROGRESS_STR: str = "This might take a while... [{index}/{total}] {comment:<{width}}"
-
-
-def load_manifest() -> List[Dict[str, Any]]:
-    manifest: List[Dict[str, Any]] = []
-    with open(MANIFEST, "r", encoding="utf-8") as manifest_file:
-        manifest = json.load(manifest_file)
-    return manifest
-
-
-def get_index(user_input: str, manifest: List[Dict[str, Any]]) -> int:
-    entry_index: int = 0
-    if user_input.isdigit():
-        search_term_i: int = int(user_input)
-        if 1 <= search_term_i <= len(manifest):
-            # Index in [1 -> len()]. NOT a problem number.
-            entry_index = search_term_i - 1
-        else:
-            for i, entry in enumerate(manifest):  # Index is a problem number.
-                if entry["problem_number"] == search_term_i:
-                    entry_index = i
-                    break
-    else:
-        for i, entry in enumerate(manifest):  # String-search.
-            search_term_s: str = user_input.strip().replace("_", " ").lower()
-            search_entry: str = entry["title"].strip().lower()
-            if search_term_s == search_entry:
-                entry_index = i
-                break
-    return entry_index
-
+# --------------------------------- Functions -------------------------------- #
 
 def setup() -> bool:
     """
-    Sets up problem-set data if not found.
+    Setup for program data.
+
+    :return: Setup status.
+    :rtype: bool
     """
+
     # Will pass even if the manifest is empty.
     # Missing data will be handled on a per-problem basis.
-    if MANIFEST.exists():
-        return True
+    data_status: bool = True
+    if not DATA_ROOT.exists():
+        DATA_ROOT.mkdir()
+        data_status = False
+    if not DATA_IO.exists():
+        DATA_IO.mkdir()
+        data_status = False
 
-    user_input: str = input(
-        "It looks like the data for the problem sets cannot be found...\n"
-        "Would you like to start the installation? [Y/N]: "
-    )
+    if data_status and MANIFEST.exists():
+        return True
+    elif not data_status and MANIFEST.exists():
+        MANIFEST.unlink()  # Delete outdated manifest.
+
+    user_input: str = input(_INSTALLATION_PROMPT_STR)
     if user_input.strip().upper() != "Y":
         return False
 
     try:
         _download_data()
-    except Exception as e:
-        print(e)
+    except:
         return False
     return True
+
+def load_manifest() -> Manifest | None:
+    """
+    Loads the program's manifest file if it exists.
+    Returns None if JSON file is malformed or it
+    does not exist.
+
+    :return: Manifest data.
+    """
+
+    try:
+        if not MANIFEST.exists():
+            return None
+        with open(MANIFEST, "r", encoding="utf-8") as manifest_file:
+            return json.load(manifest_file)
+    except json.JSONDecodeError:
+        return None
+
+def get_index(user_input: str, manifest: Manifest) -> int:
+    """
+    Returns the wanted manifest index. User input can be:
+    Problem number, manifest index itself (1-indexed),
+    Problem name.
+    Returns 0 if a match isn't found (First entry).
+
+    :param user_input: User input.
+    :param manifest: Manifest file data.
+    :return: Manifest index.
+    """
+    match user_input.isdigit():
+        case True if 1 <= int(user_input) <= len(manifest):
+            return int(user_input) - 1
+        case True if int(user_input) > len(manifest):
+            return _get_problem_number_index(int(user_input), manifest)
+        case False:
+            return _get_string_index(user_input, manifest)
+        case _:
+            return 0
+
+
+def _get_string_index(user_input: str, manifest: Manifest) -> int:
+    """
+    Returns the wanted manifest index given a problem name.
+    Helper function to `get_index()`.
+
+    :param user_input: User input, problem name.
+    :param manifest: Manifest file data.
+    :return: Manifest index.
+    """
+    entry_index: int = 0
+    for i, entry in enumerate(manifest):  # String-search.
+        search_term_s: str = user_input.strip().replace("_", " ").lower()
+        search_entry: str = entry["title"].strip().lower()
+        if search_term_s == search_entry:
+            entry_index = i
+            break
+    return entry_index
+
+
+def _get_problem_number_index(user_input: int, manifest: Manifest) -> int:
+    """
+    Returns the wanted manifest index given a problem number.
+    Helper function to `get_index()`.
+
+    :param user_input: User input, problem number.
+    :param manifest: Manifest file data.
+    :return: Manifest index.
+    """
+    for i, entry in enumerate(manifest):  # Index is a problem number.
+        if entry["problem_number"] == user_input:
+            return i
+    return 0
+
+
+# ----------------------------------- KaTeX ---------------------------------- #
+
+
+def _extract_katex(parent: HTMLTag | str) -> str:
+    """
+    Extracts the KaTeX math embedded in a
+    given tag or a string into its UTF-8 format.
+
+    :param parent: Parent tag or string.
+    :return: UTF-8 formatted KaTeX string
+    """
+
+    pattern: Pattern = re.compile(
+        "|".join((re.escape(r) for r in _KATEX_REPLACEMENTS.keys()))
+    )
+
+    target_text: str = ""
+    match parent:
+        case bs4.Tag():
+            target_text = parent.get_text()
+        case str():
+            target_text = parent
+
+    target_text = pattern.sub(lambda m: _KATEX_REPLACEMENTS[m.group(0)], target_text)
+    for regex_pattern, replacement in _KATEX_REGEX_REPLACEMENTS.items():
+        target_text = regex_pattern.sub(replacement, target_text)
+
+    # Matrices need special handling due to multi-stage
+    # regex procressing.
+    return _process_katex_matrix(target_text)
+
+
+def _process_katex_matrix(target_text: str) -> str:
+    """
+    Turns any matrix in the specified
+    text into its UTF-8 formatted
+    counterpart.
+
+    Helper function to `_extract_katex()`.
+
+    :param target_text: Targeted text to format.
+    :return: Processed string.
+    """
+
+    matches: Iterator[Match[str]] = _MATRIX_PATTERN.finditer(target_text)
+    if matches is None:
+        return target_text
+    return _MATRIX_PATTERN.sub(_matrix_repr, target_text)
+
+
+def _matrix_repr(matched: Match) -> str:
+    """
+    Returns the UTF-8 string format of the
+    matrix in the matched object.
+    Helper function to `_process_katex_matrix()`.
+
+    :param matched: Match object to format.
+    :return: UTF-8 representation of the matrix.
+    """
+    cmatrix: List[str] = []
+    content: str = matched.group(1).strip()
+    if not content:
+        return ""
+    rows: List[str] = re.split(r"\\\\s*", content)
+    for row in rows:
+        nrow: str = row.strip()
+        if not nrow:
+            continue
+        cells: List[str] = [cell.strip() for cell in nrow.split("&")]
+        if any(cells):
+            cmatrix.append(", ".join(cells))
+    if not cmatrix:
+        return ""
+    return "\n".join(cmatrix)
+
+
+# -------------------------------- Processing -------------------------------- #
+
+
+def _process_problem_tag(
+    tag: HTMLTag, manifest: Manifest, session: Session, i: int = 0, total: int = 0
+) -> None:
+    """
+    Docstring for _process_problem_tag
+
+    :param tag: Target problem tag.
+    :param manifest: Manifest file.
+    :param session: Session
+    :param i: Description
+    :param total: Total number of entries
+    """
+    link: str | Any = tag["href"]
+    task_link: str = "".join((ROOT_URL, link.removeprefix("/problemset/")))
+    tests_link: str = "".join((task_link.replace("task", "tests", 1)))
+
+    matched: Match[str] | None = _PNUM_PATTERN.match(link)
+    if not matched:  # Check for irrelevant links.
+        return
+
+    problem_number = int(matched.group(1))
+    task_data, test_data = _download_problem_data(
+        task_link, tests_link, problem_number, session
+    )
+    if task_data is None or test_data is None:
+        return
+
+    with open(DATA_IO / f"{problem_number}.zip", "wb") as io_file:
+        io_file.write(test_data)
+
+    manifest.append(task_data)
+    _display_progress(i, total, _DONE_STR)
+
+
+# -------------------------------- Downloading ------------------------------- #
 
 
 def _download_data():
     """
-    Scrapes the problem-set data from cses.fi.
+    Scrapes the problem set data from cses.fi.
     """
-
-    # Instructions
-    print(
-        "Downloading test data requires the downloader to be logged in."
-        "\nTo find your PHPSESSID,\n1. Log into cses.fi.\n2. Go to Inspect\n3. Click the Application/Storage tab.\n"
-        "4. Expand the cookies tab\n5. Look for PHPSESSID and copy the value.\n6. Paste the value here."
-    )
+    print(_DOWNLOAD_INSTRUCTIONS_STR) # Get PHPSESSID.
     cookie: str = input("Enter PHPSESSID: ")
-
-    if not DATA_ROOT.exists():
-        DATA_ROOT.mkdir()
-    if not DATA_IO.exists():
-        DATA_IO.mkdir()
 
     with open(MANIFEST, "w", encoding="utf-8") as manifest, req.Session() as session:
 
+        manifest_data: Manifest = []
         session.cookies.update({"PHPSESSID": cookie})
+        problem_list: HTMLTags = _download_problem_list(session)
 
-        response: req.Response = session.get(ROOT_URL)
-        response.raise_for_status()
+        for i, problem_tag in enumerate(problem_list, 1):
+            session.headers.update(_HEADER_HOME)  # Reset session headers.
 
-        html: str = response.text
-        bs = bs4.BeautifulSoup(html, "html.parser")
-        anchor_tags: bs4.ResultSet[bs4.Tag] = bs.find_all("a", href=_URL_PATTERN)
-
-        tasks_data: List[Dict[str, Any]] = []
-
-        for i, a_tag in enumerate(anchor_tags, 1):
-            session.headers.update(_HEADER_HOME)  # Reset headers.
-
-            link: str | Any = a_tag["href"]
-            task_link = "".join((ROOT_URL, link.removeprefix("/problemset/")))
-            tests_link = "".join((task_link.replace("task", "tests", 1)))
-
-            matched = _PNUM_PATTERN.match(link)
-            if not matched:
-                continue
-            problem_number = int(matched.group(1))
-
-            print(
-                _PROGRESS_STR.format(
-                    index=i,
-                    total=len(anchor_tags),
-                    comment=_DOWNLOAD_DESC_STR,
-                    width=_WIDTH,
-                ),
-                end="\r",
-            )
-            task = _get_with_delay(session, task_link)
-            task_data: Dict[str, Any] | None = _download_task_data(task)
-
-            print(
-                _PROGRESS_STR.format(
-                    index=i,
-                    total=len(anchor_tags),
-                    comment=_DOWNLOAD_TEST_STR,
-                    width=_WIDTH,
-                ),
-                end="\r",
-            )
-            tests = _get_with_delay(session, tests_link)
-
-            # Requires more parameters due to CSRF token. Modifies session header.
-            test_data: bytes | None = _download_test_data(tests, session, tests_link)
-
-            if task_data is None or test_data is None:
-                continue
-            task_data["problem_number"] = problem_number
-            tasks_data.append(task_data)
-
-            with open(DATA_IO / f"{problem_number}.zip", "wb") as io_file:
-                io_file.write(test_data)
-
-            print(
-                _PROGRESS_STR.format(
-                    index=i,
-                    total=len(anchor_tags),
-                    comment=_DONE_STR,
-                    width=_WIDTH,
-                ),
-                end="\r",
+            # Modifies session headers.
+            _process_problem_tag(
+                problem_tag, manifest_data, session, i, len(problem_list)
             )
 
-        json.dump(tasks_data, manifest, indent=4, ensure_ascii=False)
+        json.dump(manifest_data, manifest, indent=4, ensure_ascii=False)
 
 
-def _get_with_delay(session: req.Session, url: str) -> req.Response:
+def _download_problem_list(session: Session) -> HTMLTags:
     """
-    Sends a GET request to the given URL using the given session.
-    Adds a delay controlled by the DELAY global variable.
+    Downloads the problem list from the website root
+    as a list of anchor tags.
+
+    :param session: Current requests session.
+    :return: HTML tags containing anchor links on cses.fi.
     """
-    response: req.Response = session.get(url)
-    time.sleep(_DELAY)
-    response.raise_for_status()
-    return response
+    response: Response = _get_with_delay(session, ROOT_URL)
+    html: str = response.text
+    root: HTMLParser = bs4.BeautifulSoup(html, "html.parser")
+    return root.find_all("a", href=_URL_PATTERN)
 
 
-def _download_task_data(task: req.Response) -> Dict[str, str] | None:
+def _download_problem_data(
+    task_link: str,
+    tests_link: str,
+    problem_number: int,
+    session: Session,
+    i: int = 0,
+    total: int = 0,
+    enable_progress: bool = False,
+) -> Tuple[ManifestEntry | None, bytes | None]:
     """
-    Downloads and parses the text data received through the response.
+    Downloads the related data for a given problem
+    from cses.fi.
+
+    :param task_link: Problem/task link
+    :param tests_link: Testcases link.
+    :param session: Current requests session.
+    :param i: Current problem number (Progress display)
+    :param total: Total number of problems to process (Progress display)
+    :return: Task data and its test cases as binary data.
     """
-    bs = bs4.BeautifulSoup(task.text, "html.parser")
-    title: bs4.Tag | None = bs.select_one("div.content > title")
-    constraints: bs4.Tag | None = bs.select_one("ul.task-constraints")
-    description: bs4.Tag | None = bs.select_one("div.content div.md")
+    if enable_progress:
+        _display_progress(i, total, _DOWNLOAD_DESC_STR)
+    task: Response = _get_with_delay(session, task_link)
+    manifest_entry: ManifestEntry | None = _download_manifest_data(task, problem_number)
+
+    # Requires more parameters due to CSRF token.
+    # _download_test_data() modifies session header.
+    if enable_progress:
+        _display_progress(i, total, _DOWNLOAD_TEST_STR)
+    tests: Response = _get_with_delay(session, tests_link)
+    test_data: bytes | None = _download_test_data(tests, session, tests_link)
+    return (manifest_entry, test_data)
+
+
+def _download_manifest_data(
+    task: Response, problem_number: int
+) -> ManifestEntry | None:
+    """
+    Extracts the related manifest data
+    from the given webpage response.
+
+    :param task: Targeted task.
+    :param problem_number: Current problem number.
+    :return: Manifest entry data.
+    """
+    bs: HTMLParser = bs4.BeautifulSoup(task.text, "html.parser")
+    title: HTMLTag | None = bs.select_one("div.content > title")
+    constraints: HTMLTag | None = bs.select_one("ul.task-constraints")
+    description: HTMLTag | None = bs.select_one("div.content div.md")
 
     if description is None or constraints is None or title is None:
         return None
@@ -260,96 +450,82 @@ def _download_task_data(task: req.Response) -> Dict[str, str] | None:
         if not isinstance(element, bs4.Tag):  # Catches whitespace/newlines.
             continue
         element_name: str = element.name
-        if element_name in ("p", "h1", "pre", "ul"):
+        if element_name in ("p", "h1", "pre", "ul"):  # Related HTML tags.
             description_text.append(_extract_katex(element))
 
     return {
-        "title": title_text.removeprefix("CSES - "),
-        "time_limit": constraints_text[0].removeprefix("Time limit:"),
-        "memory_limit": constraints_text[1].removeprefix("Memory limit:"),
-        "description": "\n".join(description_text),
+        MANIFEST_TITLE: title_text.removeprefix("CSES - "),
+        MANIFEST_TIME_LIMIT: constraints_text[0].removeprefix("Time limit:"),
+        MANIFEST_MEMORY_LIMIT: constraints_text[1].removeprefix("Memory limit:"),
+        MANIFEST_DESCRIPTION: "\n".join(description_text),
+        MANIFEST_PROBLEM_NUMBER: problem_number,
     }
 
 
-def _extract_katex(parent: bs4.Tag | str) -> str:
+def _download_test_data(tests: Response, session: Session, url: str) -> bytes | None:
     """
-    Extracts the KaTeX math embedded in a given tag.
+    Downloads test data from the given url.
+
+    :param tests: Target webpage data.
+    :param session: Current requests session.
+    :param url: Target webpage URL.
+    :return: Testcase data in raw bytes.
     """
-    replacements: Dict[str, str] = _KATEX_REPLACEMENTS
-    regex_replacements: Dict[re.Pattern[str], str] = _KATEX_REGEX_REPLACEMENTS
-
-    pattern: re.Pattern = re.compile(
-        "|".join((re.escape(r) for r in replacements.keys()))
-    )
-    text: str = ""
-    match parent:
-        case bs4.Tag():
-            text = parent.get_text()
-        case str():
-            text = parent
-    text = pattern.sub(lambda m: replacements[m.group(0)], text)
-
-    for regex_pattern, replacement in regex_replacements.items():
-        text = regex_pattern.sub(replacement, text)
-
-    # Matrices need special handling.
-    matrix_pattern: re.Pattern = re.compile(
-        r"\\begin{matrix}\s*(.*?)\s*\\end{matrix}", re.DOTALL
-    )
-    matches: Iterator[re.Match[str]] = matrix_pattern.finditer(text)
-    if matches is None:
-        return text
-
-    def matrix_repr(matched: re.Match) -> str:
-
-        cmatrix: List[str] = []
-        content: str = matched.group(1).strip()
-        if not content:
-            return ""
-        rows: List[str] = re.split(r"\\\\s*", content)
-        for row in rows:
-            nrow: str = row.strip()
-            if not nrow:
-                continue
-            cells: List[str] = [cell.strip() for cell in nrow.split("&")]
-            if any(cells):
-                cmatrix.append(", ".join(cells))
-        if not cmatrix:
-            return ""
-        return "\n".join(cmatrix)
-
-    text = matrix_pattern.sub(matrix_repr, text)
-    return text
-
-
-def _download_test_data(
-    tests: req.Response, session: req.Session, url: str
-) -> bytes | None:
-    """
-    Downloads the in/out files for the given problem set.
-    This function modifies the session header.
-    """
-    header: Dict[str, str] = _HEADER_HOME
+    header: RequestHeader = _HEADER_HOME
     header["referer"] = url
     session.headers.update(header)
 
-    bs = bs4.BeautifulSoup(tests.text, "html.parser")
+    root: HTMLParser = bs4.BeautifulSoup(tests.text, "html.parser")
 
-    form_tag: bs4.Tag | None = bs.select_one("div.content form")
+    form_tag: HTMLTag | None = root.select_one("div.content form")
     if form_tag is None:
         return None
 
-    token_tag = form_tag.select_one("input[name='csrf_token']")
-    download_tag = form_tag.select_one("input[name='download']")
+    token_tag: HTMLTag | None = form_tag.select_one("input[name='csrf_token']")
+    download_tag: HTMLTag | None = form_tag.select_one("input[name='download']")
 
     token: str | Any = token_tag.get("value") if token_tag else None
     download: str | Any = download_tag.get("value") if download_tag else "true"
     if not isinstance(token, str) or not isinstance(download, str):
         return None
 
-    payload: Dict[str, str] = {"csrf_token": token, "download": download}
-    response: req.Response = session.post(url, payload)
+    payload: RequestPayload = {"csrf_token": token, "download": download}
+    response: Response = session.post(url, payload)
     response.raise_for_status()
     return response.content
 
-    # do something
+
+# ----------------------------- Private Utilities ---------------------------- #
+
+
+def _display_progress(i: int, total: int, comment: str) -> None:
+    """
+    Displays current progress/process status to the user.
+
+    :param i: Current entry count.
+    :param total: Total entries to process.
+    :param comment: Comment to display.
+    """
+    formatted_str: str = _PROGRESS_STR.format(
+        index=i,
+        total=total,
+        comment=comment,
+        width=_LDISP_WIDTH,
+    )
+    print(formatted_str, end="\r")
+
+
+def _get_with_delay(session: req.Session, url: str) -> Response:
+    """
+    Sends a GET request to the specified URL
+    via the session provided. Sleeps for
+    `_REQUEST_DELAY` seconds afterwards.
+
+    :param session: Description
+    :param url: Target URL.
+    :return: Server response.
+    """
+    response: Response = session.get(url)
+    response.raise_for_status()
+    time.sleep(_REQUEST_DELAY)
+    return response
