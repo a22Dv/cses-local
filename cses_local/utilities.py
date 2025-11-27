@@ -5,6 +5,8 @@
 
 import os
 
+from cses_local.data import MANIFEST_PROBLEM_NUMBER, MANIFEST_TITLE, ManifestEntry
+
 _WIN_NAME: str = "nt"
 _WIN_CLEAR_CONSOLE_COMMAND: str = "cls"
 _POSIX_CLEAR_CONSOLE_COMMAND: str = "clear"
@@ -60,6 +62,26 @@ def underline(string: str) -> str:
     return f"\x1b[4m{string}\x1b[24m"
 
 
+def red(string: str) -> str:
+    """
+    Formats the string in ANSI red.
+
+    :param string: Input string.
+    :return: Copy of input string formatted in red.
+    """
+    return f"\x1b[1;31m{string}\x1b[0m"
+
+
+def green(string: str) -> str:
+    """
+    Formats the string in ANSI green.
+
+    :param string: Input string.
+    :return: Copy of input string formatted in green.
+    """
+    return f"\x1b[1;32m{string}\x1b[0m"
+
+
 # ----------------------------- Console utilities ---------------------------- #
 
 
@@ -69,7 +91,6 @@ def clear_console() -> int:
 
     :return: `os.system` command return code.
     """
-
     return os.system(
         _WIN_CLEAR_CONSOLE_COMMAND
         if os.name == _WIN_NAME
@@ -83,3 +104,17 @@ def quit() -> None:
     """
     clear_console()
     exit(0)
+
+
+# ------------------------------- Miscellaneous ------------------------------ #
+
+
+def print_manifest_header(manifest_entry: ManifestEntry, result: str, label: str = "RESULT") -> None:
+    """
+    Prints a header for the specified manifest entry,
+    along with a specified result.
+
+    :param manifest_entry: Manifest entry.
+    """
+    print(f"CSES #{manifest_entry[MANIFEST_PROBLEM_NUMBER]}: {manifest_entry[MANIFEST_TITLE]}")
+    print(f"{label}: {result}")

@@ -6,7 +6,8 @@
 import os
 import cses_local.utilities as utils
 
-from subprocess import CompletedProcess, run, CalledProcessError
+from cses_local.data import ManifestEntry
+from subprocess import run, CalledProcessError
 from pathlib import Path
 from typing import List
 from shutil import which
@@ -26,6 +27,7 @@ SUPPORTED_C_COMPILERS: List[str] = [
 ]
 
 JAVA_COMPILER: str = "javac"
+JAVA_VM: str = "java"
 
 SUPPORTED_COMPILED_LANGUAGE_EXTENSIONS: List[str] = [".c", ".cpp", ".cxx", ".java"]
 
@@ -33,8 +35,14 @@ SUPPORTED_INTERPRETED_LANGUAGE_EXTENSIONS: List[str] = [".py"]
 
 COMPILED_LANGUAGE_PLACEHOLDER: Path = Path("COMPILED_LANGUAGE_PREPROCESS")
 
+_MANIFEST_ENTRY_SETONCE: ManifestEntry | None = None
 
-def preprocess(source_file: Path) -> Tuple[Path | None, Path | None]:
+_CHECK_ONLY_ONE_COMPILER: bool = True
+
+
+def preprocess(
+    source_file: Path, manifest_entry: ManifestEntry
+) -> Tuple[Path | None, Path | None]:
     """
     Preprocesses a source file, compiling
     it if necessary.
@@ -46,12 +54,23 @@ def preprocess(source_file: Path) -> Tuple[Path | None, Path | None]:
     target: Path | None = None
     executor: Path | None = None
 
+    # Read-only after this instance.
+    # Avoids drilling the arguments into helper methods just for exception info.
+    global _MANIFEST_ENTRY_SETONCE
+    _MANIFEST_ENTRY_SETONCE = manifest_entry
+
     if extension in SUPPORTED_COMPILED_LANGUAGE_EXTENSIONS:
         target = _dispatch_compiler(source_file)
         executor = COMPILED_LANGUAGE_PLACEHOLDER
     elif extension in SUPPORTED_INTERPRETED_LANGUAGE_EXTENSIONS:
         target = source_file
         executor = _dispatch_interpreter(source_file)
+
+    if extension == ".java":
+        jvm: str | None = which(JAVA_VM)
+        if not jvm:
+            return (target, None)
+        executor = Path(jvm)
     return (target, executor)
 
 
@@ -106,7 +125,11 @@ def _compile_java(source_file: Path) -> Path | None:
         run(args, check=True, capture_output=True, text=True)
     except CalledProcessError as e:
         utils.clear_console()
-        print(e.stderr)
+        if _MANIFEST_ENTRY_SETONCE:
+            utils.print_manifest_header(
+                _MANIFEST_ENTRY_SETONCE, utils.red("COMPILE ERROR")
+            )
+        print(utils.red(f"{e.stderr}"))
         return None
     except Exception as e:
         print(e)
@@ -146,7 +169,7 @@ def _compile_c_like(source_file: Path, compilers: List[str]) -> Path | None:
     :return: Returns a path to the compiled executable if compilation succeeds.
     """
     executable_extension: str = ".exe" if os.name == "nt" else ""
-    executable_path: Path = Path(f"{source_file.stem}{executable_extension}")
+    executable_path: Path = source_file.with_suffix(executable_extension)
     compiled: bool = False
     for compiler in compilers:
         try:
@@ -159,18 +182,21 @@ def _compile_c_like(source_file: Path, compilers: List[str]) -> Path | None:
                 "-o",
                 str(executable_path),
             ]
-            result: CompletedProcess = run(
-                args, check=True, capture_output=True, text=True
-            )
-            if result.returncode != 0:
-                utils.clear_console()
-                print(result.stdout)
-                continue
+            run(args, check=True, capture_output=True, text=True)
             compiled = True
             break
+        except CalledProcessError as e:
+            if _MANIFEST_ENTRY_SETONCE:
+                utils.print_manifest_header(
+                    _MANIFEST_ENTRY_SETONCE, utils.red(f"COMPILE ERROR[{compiler}]")
+                )
+            print(utils.red(f"{e.stderr}"))
+            if _CHECK_ONLY_ONE_COMPILER:
+                break
         except Exception as e:
-            print(e)
-            continue
+            print(utils.red(f"{e}"))
+            if _CHECK_ONLY_ONE_COMPILER:
+                break
 
     if not compiled:
         return None

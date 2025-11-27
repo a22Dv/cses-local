@@ -5,8 +5,6 @@
 # TODO:
 # Support "previous" index.
 # Implement online submissions.
-# Display results.
-# Finish implementation of local submissions.
 
 import time
 import psutil
@@ -18,6 +16,7 @@ import cses_local.utilities as utils
 import cses_local.preprocess as prep
 
 from cses_local.data import Manifest, ManifestEntry
+
 from pathlib import Path
 from typing import List, Dict, Any, Callable, Tuple
 from subprocess import Popen, PIPE
@@ -39,6 +38,18 @@ _MLE: str = "MEMORY LIMIT EXCEEDED"
 _RTE: str = "RUNTIME ERROR"
 _WA: str = "WRONG ANSWER"
 _A: str = "ACCEPTED"
+
+_RESULT_VERDICT: str = "verdict"
+_RESULT_MEMUSE: str = "memory_usage"
+_RESULT_TIMEEXEC: str = "time_executed"
+
+_LANGUAGE_EXT_MAP: Dict[str, str] = {
+    ".java": "Java",
+    ".py": "Python",
+    ".c": "C",
+    ".cpp": "C++",
+    ".cxx": "C++",
+}
 
 
 def submit(index: str, file: str, online: bool) -> None:
@@ -65,9 +76,10 @@ def submit(index: str, file: str, online: bool) -> None:
             _local_submit(filepath, manifest[manifest_index])
     except Exception as e:
         utils.clear_console()
-        print(e)
+        print(f"Submission error: {e}")
 
 
+# TODO
 def _online_submit(index: int, file: Path) -> None:
     pass
 
@@ -80,14 +92,20 @@ def _local_submit(file: Path, manifest_entry: Dict[str, Any]) -> None:
     :param file: Submission source file.
     :param manifest_entry: Relevant manifest file entry.
     """
-    target, executor = prep.preprocess(file)
+    utils.clear_console()
 
+    # Requires manifest_entry for error-printing information.
+    print(f"{"Processing source file...":<50}", end="\r")
+    target, executor = prep.preprocess(file, manifest_entry)
     if target is None or executor is None:
-        return None  # No compatible compiler or interpreter path found.
+        return None
 
+    print(f"{"Running tests...":<50}", end="\r")
     results: TestResults | None = _run(executor, target, manifest_entry)
     if results is None:
-        pass
+        return None
+    language: str = _LANGUAGE_EXT_MAP[file.suffix]
+    _display_results(results, manifest_entry, language)
 
 
 def _run(
@@ -101,8 +119,12 @@ def _run(
     :param index: Manifest index.
     """
     problem_number: int = manifest_entry[data.MANIFEST_PROBLEM_NUMBER]
-    memory_limit: float = float(manifest_entry[data.MANIFEST_MEMORY_LIMIT])
-    time_limit: float = float(manifest_entry[data.MANIFEST_TIME_LIMIT])
+    memory_limit: float = float(
+        manifest_entry[data.MANIFEST_MEMORY_LIMIT].removesuffix(" MB")
+    )
+    time_limit: float = float(
+        manifest_entry[data.MANIFEST_TIME_LIMIT].removesuffix(" s")
+    )
 
     test_cases: Testcases | None = _extract_test_cases(problem_number)
     if test_cases is None:
@@ -126,7 +148,12 @@ def _run(
                 temp,
                 test_case[_TESTCASE_OUTPUT],
             )
-            # TODO:
+            result: Dict[str, str] = {
+                _RESULT_MEMUSE: f"{memory_usage:.2f}",
+                _RESULT_TIMEEXEC: f"{time_executed:.2f}",
+                _RESULT_VERDICT: verdict,
+            }
+            results.append(result)
 
     return results
 
@@ -234,7 +261,7 @@ def _create_process(
             proc.kill()
         except psutil.NoSuchProcess:
             pass
-    return (pmmusage, time_poll, rcode)  # type: ignore rcode is valid at this point.
+    return (pmmusage, time_poll, rcode)  # type: ignore as rcode is valid at this point.
 
 
 def _extract_test_cases(problem_number: int) -> Testcases | None:
@@ -262,174 +289,38 @@ def _extract_test_cases(problem_number: int) -> Testcases | None:
     return testcases
 
 
-# -------------------------------- DEPRECATED -------------------------------- #
-
-
-# NOTE: Deprecated
 def _display_results(
-    results: List[Dict[str, str]], manifest_entry: Dict[str, Any]
+    results: Testcases, manifest_entry: Dict[str, Any], language: str
 ) -> None:
+    """
+    Displays the test results from the given run.
 
-    print(f"CSES #{manifest_entry["problem_number"]}: {manifest_entry["title"]}")
-
-    total_result: str = ""
+    :param results: Test results.
+    :param manifest_entry: Relevant problem entry that the results came from.
+    """
+    total_result: str | None = None
     for result in results:
-        if result["verdict"] != "ACCEPTED":
-            total_result = result["verdict"]
+        if result[_RESULT_VERDICT] != _A:
+            total_result = result[_RESULT_VERDICT]
             break
-    if total_result == "":
-        total_result = "\x1b[1;32mACCEPTED\x1b[0m"
+    if total_result is None:
+        total_result = utils.green(_A)
     else:
-        total_result = f"\x1b[1;31m{total_result}\x1b[0m"
+        total_result = utils.red(total_result)
 
-    print(f"RESULT: {total_result}")
-    print("TEST RESULTS:")
-    header_results: str = f"{'TEST':^6}|{'VERDICT':^24}|{'TIME':^10}"
-    print(header_results)
-    print(f"{"-" * 6}+{"-" * 24}+{"-" * 10}")
+    utils.clear_console()
+    utils.print_manifest_header(manifest_entry, total_result, "VERDICT")
+    print(f"LANGUAGE: {language}")
+    print("TEST RESULTS:\n")
+    print(f"{'TEST':^6}│{'VERDICT':^24}│{'TIME':^12}│{'MEMORY':^12}")
+    print(f"{"─" * 6}┼{"─" * 24}┼{"─" * 12}┼{"─" * 12}")
     for i, result in enumerate(results, 1):
-        verdict: str = result["verdict"]
-        if verdict == "ACCEPTED":
-            verdict = f"\x1b[1;32m{verdict:^24}\x1b[0m"
+        verdict: str = result[_RESULT_VERDICT]
+        if verdict == _A:
+            verdict = utils.green(f"{verdict:^24}")
         else:
-            verdict = f"\x1b[1;31m{verdict:^24}\x1b[0m"
-        print(f"{f"#{i}":^6}|{verdict}| {result["time"]:^10}")
-    pass
-
-
-# NOTE: Depracated
-def _create_process_compiled(
-    test_in: str, executable: Path, stdout_file
-) -> Tuple[bool, psutil.Process, Popen]:
-    executable_proc = Popen(
-        [str(executable)],
-        stdin=PIPE,
-        stdout=stdout_file,
-        stderr=PIPE,
-        text=True,  # Text mode for input is fine
-    )
-    process = psutil.Process(executable_proc.pid)
-
-    if executable_proc.stdin:
-        try:
-            executable_proc.stdin.write(test_in)
-            executable_proc.stdin.close()
-            return (True, process, executable_proc)
-        except (BrokenPipeError, OSError):
-            return (False, process, executable_proc)
-    return (False, process, executable_proc)
-
-
-# NOTE: Depracated
-def _run_compiled(
-    executable: Path, index: int, memory_limit_mb: int, time_limit_s: float
-) -> List[Dict[str, str]]:
-    test_cases = _extract_test_cases(index)
-    verdicts = []
-    if test_cases is None:
-        return []
-    for test_case in test_cases:
-        exec_obj = None
-
-        # Create a temp file. Python deletes it automatically when closed.
-        with tempfile.TemporaryFile(mode="w+") as tmp_out:
-            try:
-                # Pass the file handle to the subprocess
-                in_valid, proc, exec_obj = _create_process_compiled(
-                    test_case["in"], executable, tmp_out
-                )
-
-                if not in_valid:
-                    raise ChildProcessError("STDIN Error")
-
-                start_time = time.perf_counter()
-                elapsed = 0.0
-                max_mem = 0.0
-                rcode = None
-
-                # Monitoring Loop
-                while elapsed < time_limit_s and rcode is None:
-                    try:
-                        mem = proc.memory_info().rss / (1024 * 1024)
-                        max_mem = max(mem, max_mem)
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        break  # Process died naturally
-
-                    if max_mem > memory_limit_mb:
-                        break
-
-                    time.sleep(0.01)
-                    elapsed = time.perf_counter() - start_time
-                    rcode = exec_obj.poll()
-
-                # Verdict Logic
-                if max_mem > memory_limit_mb:
-                    verdicts.append(
-                        {
-                            "verdict": "MEMORY LIMIT EXCEEDED",
-                            "time": "--",
-                            "memory": f"{max_mem:.1f} MB",
-                        }
-                    )
-                elif elapsed > time_limit_s:
-                    verdicts.append(
-                        {
-                            "verdict": "TIME LIMIT EXCEEDED",
-                            "time": "--",
-                            "memory": f"{max_mem:.1f} MB",
-                        }
-                    )
-                elif (rcode or exec_obj.poll()) != 0:
-                    verdicts.append(
-                        {
-                            "verdict": "RTE",
-                            "time": f"{elapsed:.3f} s",
-                            "memory": f"{max_mem:.1f} MB",
-                        }
-                    )
-                else:
-                    # Success! Rewind file and read
-                    tmp_out.seek(0)
-                    output = tmp_out.read()
-
-                    if output.split() == test_case["out"].split():
-                        verdicts.append(
-                            {
-                                "verdict": "ACCEPTED",
-                                "time": f"{elapsed:.3f} s",
-                                "memory": f"{max_mem:.1f} MB",
-                            }
-                        )
-                    else:
-                        verdicts.append(
-                            {
-                                "verdict": "WRONG ANSWER",
-                                "time": f"{elapsed:.3f} s",
-                                "memory": f"{max_mem:.1f} MB",
-                            }
-                        )
-
-            except Exception as e:
-                verdicts.append(
-                    {"verdict": f"ERROR: {e}", "time": "--", "memory": "--"}
-                )
-            finally:
-                # Cleanup: Kill process if still running
-                if exec_obj and exec_obj.poll() is None:
-                    try:
-                        parent = psutil.Process(exec_obj.pid)
-                        for child in parent.children(recursive=True):
-                            child.kill()
-                        parent.kill()
-                        exec_obj.wait(timeout=0.1)
-                    except:
-                        pass
-
-    return verdicts
-
-
-# NOTE: Deprecated
-def _run_interpreted(
-    executable: Path, index: int, memory_limit_mb: int, time_limit_s: float
-) -> List[Dict[str, str]]:
-    return []
+            verdict = utils.red(f"{verdict:^24}")
+        print(
+            f"{f"#{i}":^6}│{verdict}│{f'{result[_RESULT_TIMEEXEC]}s':^12}│{f'{result[_RESULT_MEMUSE]} MB':^12}"
+        )
+    print()
