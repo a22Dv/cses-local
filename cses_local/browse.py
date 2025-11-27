@@ -32,10 +32,16 @@ _LIMITS_FMT: str = "Time limit: {tl} | Memory limit: {ml}"
 
 def browse(index: str | None) -> None:
     """
-    Browse local problem definitions.
+    Starts browsing given the user's requested
+    starting point. Defaults to the first entry if
+    `index` is `None`.
+    
+    :param index: Index to start browsing at.
     """
 
-    manifest: Manifest = data.load_manifest()
+    manifest: Manifest | None = data.load_manifest()
+    if manifest is None:
+        return
     entry_index: int = data.get_index(index, manifest) if index else 0
 
     while utils.clear_console() == 0:  # Event loop. Always true unless system() fails.
@@ -44,7 +50,12 @@ def browse(index: str | None) -> None:
 
         _display(entry, entry_index)
 
-        key: str = rch.readkey()  # Consumes Ctrl+C. No need for try-catch.
+        key: str = ""
+        try:
+            key = rch.readkey()  
+        except KeyboardInterrupt:
+            key = rchkey.CTRL_C
+
         entry_index = _handle_input(key, entry_index, manifest)
 
 
@@ -107,6 +118,7 @@ def _handle_input(key: str, cidx: int, manifest: Manifest) -> int:
 def _jump_to(manifest: List[ManifestEntry]) -> int:
     """
     Returns the index the user wants to jump to.
+    Helper function to _handle_input().
     """
     utils.clear_console()
     user_input: str = input("Jump to Problem: ")

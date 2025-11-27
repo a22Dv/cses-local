@@ -207,7 +207,7 @@ def _get_string_index(user_input: str, manifest: Manifest) -> int:
     :return: Manifest index.
     """
     entry_index: int = 0
-    for i, entry in enumerate(manifest):  # String-search.
+    for i, entry in enumerate(manifest): 
         search_term_s: str = user_input.strip().replace("_", " ").lower()
         search_entry: str = entry["title"].strip().lower()
         if search_term_s == search_entry:
@@ -225,7 +225,7 @@ def _get_problem_number_index(user_input: int, manifest: Manifest) -> int:
     :param manifest: Manifest file data.
     :return: Manifest index.
     """
-    for i, entry in enumerate(manifest):  # Index is a problem number.
+    for i, entry in enumerate(manifest):
         if entry["problem_number"] == user_input:
             return i
     return 0

@@ -1,135 +1,275 @@
 # submit.py
 #
 # Handle code submissions.
+#
+# TODO:
+# Support "previous" index.
+# Implement online submissions.
+# Display results.
+# Finish implementation of local submissions.
 
-# TODO: REFACTOR FILE.
-
-import cses_local.data as data
 import time
-import shutil as sh
-import sys
 import psutil
 import tempfile
+import os
 import zipfile
+import cses_local.data as data
+import cses_local.utilities as utils
+import cses_local.preprocess as prep
 
-import subprocess
-
+from cses_local.data import Manifest, ManifestEntry
 from pathlib import Path
 from typing import List, Dict, Any, Callable, Tuple
+from subprocess import Popen, PIPE
 
-_CPP_COMPILERS: List[str] = [
-    "clang-cl",
-    "clang",
-    "g++",
-]
-
-_C_COMPILERS: List[str] = [
-    "clang-cl",
-    "clang",
-    "gcc",
-    "g++",
-]
-
-_IN_OUT_EXTENSIONS: List[str] = [".in", ".out"]
-
+type TestingProcess = Popen[str]
+type TestResults = List[Dict[str, str]]
+type Testcases = List[Dict[str, str]]
 type Executor = Callable[[Path, int, int, float], List[Dict[str, str]]]
 
+_TESTCASE_INPUT: str = ".in"
+_TESTCASE_OUTPUT: str = ".out"
 
-def _compile_c_like(file: Path, compiler_list: List[str]) -> Path:
-    """
-    Facilitates the compilation of C-like languages (C/C++),
-    and returns a path to the executable.
-    """
-    extension: str = ".exe" if sys.platform.startswith("win") else ""
-    compiled: bool = False
-    executable_path: str = f"{file.stem}{extension}"
-    for compiler in compiler_list:
-        which: str | None = sh.which(compiler)
-        if which is None:
-            continue
-        args: List[str] = [which, str(file), "-o", executable_path]
-        result: subprocess.CompletedProcess = subprocess.run(
-            args, check=True, capture_output=True, text=True
-        )
-        if result.stdout:
-            print(result.stdout)
-        compiled = True
-        break
+_MEGABYTE = 1024 * 1024
+_OUTPUT_LIMIT = 500 * _MEGABYTE
 
-    if not compiled:
-        raise EnvironmentError(
-            f"Could not find a suitable {extension.removeprefix(".").upper()} compiler."
-        )
-    return Path(executable_path).resolve()
+_OLE: str = "OUTPUT LIMIT EXCEEDED"
+_TLE: str = "TIME LIMIT EXCEEDED"
+_MLE: str = "MEMORY LIMIT EXCEEDED"
+_RTE: str = "RUNTIME ERROR"
+_WA: str = "WRONG ANSWER"
+_A: str = "ACCEPTED"
 
 
-def _compile_c(file: Path) -> Path:
-    return _compile_c_like(file, _C_COMPILERS)
-
-
-def _compile_cpp(file: Path) -> Path:
-    return _compile_c_like(file, _CPP_COMPILERS)
-
-
-# Extension and the compiler.
-_SUPPORTED_COMPILED_LANGUAGES: Dict[str, Callable[[Path], Path]] = {
-    ".c": _compile_c,
-    ".cpp": _compile_cpp,
-    ".cxx": _compile_cpp,
-}
-
-# Extension and the interpreter.
-_SUPPORTED_INTERPRETED_LANGUAGES: Dict[str, str] = {".py": "python"}
-
-
-# Support "previous" index.
 def submit(index: str, file: str, online: bool) -> None:
     """
-    Submit a file of code to the local judge.
-    """
+    Submits a file through the local judge or
+    through online if specified (Requires login credentials.)
 
-    manifest: List[Dict[str, Any]] = data.load_manifest()
+    :param index: Target problem
+    :param file: Submission source file.
+    :param online: Specifies whether to pass to the website itself or evaluate locally.
+    """
+    manifest: Manifest | None = data.load_manifest()
+    if manifest is None:
+        return None  # Manifest not found.
+
     manifest_index: int = data.get_index(index, manifest)
-    manifest_entry: Dict[str, Any] = manifest[manifest_index]
-    problem_number: int = manifest_entry["problem_number"]
+    manifest_entry: ManifestEntry = manifest[manifest_index]
 
     filepath: Path = Path(file).resolve()
     try:
         if online:
-            _online_submit(problem_number, filepath)
+            _online_submit(manifest_entry["problem_number"], filepath)
         else:
-            _local_submit(problem_number, filepath, manifest[manifest_index])
+            _local_submit(filepath, manifest[manifest_index])
     except Exception as e:
+        utils.clear_console()
         print(e)
 
 
-def _local_submit(index: int, file: Path, manifest_entry: Dict[str, Any]) -> None:
-    """
-    Submits to the local judge.
-    """
-    executor, target = _process_file(file)
-    memory_limit: int = int(
-        manifest_entry["memory_limit"].replace(" ", "").strip().removesuffix("MB")
-    )
-    time_limit: float = float(
-        manifest_entry["time_limit"].replace(" ", "").strip().removesuffix("s")
-    )
-    results: List[Dict[str, str]] = executor(target, index, memory_limit, time_limit)
-    _display_results(results, manifest_entry)
-
-
-# TODO: Implementation
 def _online_submit(index: int, file: Path) -> None:
-    """
-    Submits to the online judge.
-    Requires login credentials.
-    """
     pass
 
 
+def _local_submit(file: Path, manifest_entry: Dict[str, Any]) -> None:
+    """
+    Submits the source file for local evaluation.
+
+    :param index: Target problem manifest index.
+    :param file: Submission source file.
+    :param manifest_entry: Relevant manifest file entry.
+    """
+    target, executor = prep.preprocess(file)
+
+    if target is None or executor is None:
+        return None  # No compatible compiler or interpreter path found.
+
+    results: TestResults | None = _run(executor, target, manifest_entry)
+    if results is None:
+        pass
+
+
+def _run(
+    executor: Path, target: Path, manifest_entry: ManifestEntry
+) -> TestResults | None:
+    """
+    Runs the given source file based on the executor and target.
+
+    :param executor: Interpreter path. COMPILED_LANGUAGE_PLACEHOLDER if compiled.
+    :param target: Target executable.
+    :param index: Manifest index.
+    """
+    problem_number: int = manifest_entry[data.MANIFEST_PROBLEM_NUMBER]
+    memory_limit: float = float(manifest_entry[data.MANIFEST_MEMORY_LIMIT])
+    time_limit: float = float(manifest_entry[data.MANIFEST_TIME_LIMIT])
+
+    test_cases: Testcases | None = _extract_test_cases(problem_number)
+    if test_cases is None:
+        return None
+
+    is_compiled: bool = executor == prep.COMPILED_LANGUAGE_PLACEHOLDER
+    args: List[str] = [str(target)] if is_compiled else [str(executor), str(target)]
+    results: TestResults = []
+
+    for test_case in test_cases:
+        with tempfile.TemporaryFile("w+") as temp:
+            memory_usage, time_executed, rcode = _create_process(
+                memory_limit, time_limit, test_case, args, temp
+            )
+            verdict: str = _get_verdict(
+                time_limit,
+                time_executed,
+                memory_limit,
+                memory_usage,
+                rcode,
+                temp,
+                test_case[_TESTCASE_OUTPUT],
+            )
+            # TODO:
+
+    return results
+
+
+def _get_verdict(
+    time_limit: float,
+    time_executed: float,
+    memory_limit: float,
+    memory_usage: float,
+    rcode: int,
+    output_file: tempfile._TemporaryFileWrapper[str],
+    expected: str,
+) -> str:
+    """
+    Returns a verdict based on the process outcome and
+    test-case limits.
+    Helper function to _run().
+
+    :param time_limit: Testcase time limit
+    :param time_executed: Program time executed.
+    :param memory_limit: Testcase memory limit.
+    :param memory_usage: Program memory usage.
+    :param rcode: Program return code.
+    :param output_file: File that the program saved the output to.
+    :param expected: Expected output.
+    :return: Test verdict.
+    """
+
+    if memory_usage > memory_limit:
+        return _MLE
+    elif rcode != 0:
+        return _RTE
+    elif time_executed > time_limit:
+        return _TLE
+    if os.fstat(output_file.fileno()).st_size > _OUTPUT_LIMIT:
+        return _OLE
+
+    output_file.seek(0)  # Rewind file pointer
+    expected_tokens: List[str] = expected.split()
+    output_tokens: List[str] = output_file.read().split()
+
+    if expected_tokens != output_tokens:
+        return _WA
+    return _A
+
+
+def _create_process(
+    mem_limit: float,
+    time_limit: float,
+    test_case: Dict[str, str],
+    arguments: List[str],
+    out_handle: tempfile._TemporaryFileWrapper[str],
+) -> Tuple[float, float, int]:
+    """
+    Monitors the running subprocess and returns the
+    maximum memory usage and time run. Kills the subprocess if
+    it exceeds the provided memory and time limit.
+    Caller has to check the returned values to see if any
+    constraints were violated, including if the file exceeds the
+    output limit.
+
+    Helper function to _run().
+
+    :param memory_limit: Memory limit of the problem.
+    :param time_limit: Time limit of the problem.
+    :return: Peak memory usage, time spent in execution.
+    """
+    subproc: Popen = Popen(
+        arguments, stdin=PIPE, stdout=out_handle, stderr=out_handle, text=True
+    )
+    if subproc.stdin:
+        try:
+            subproc.stdin.write(test_case[_TESTCASE_INPUT])
+            subproc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+
+    to_mb = lambda v: v / _MEGABYTE
+    try:
+        proc: psutil.Process = psutil.Process(subproc.pid)
+    except psutil.NoSuchProcess:
+        return (0.0, 0.0, subproc.wait())
+
+    time_start: float = time.perf_counter()
+    time_poll: float = 0.0
+    pmmusage: float = 0.0
+    try:
+        pmmusage = to_mb(proc.memory_info().rss)
+        while (
+            subproc.poll() is None
+            and (pmmusage := max(pmmusage, to_mb(proc.memory_info().rss))) < mem_limit
+            and (time_poll := time.perf_counter() - time_start) < time_limit
+            and os.fstat(out_handle.fileno()).st_size < _OUTPUT_LIMIT
+        ):
+            time.sleep(0.01)  # 10ms
+    except psutil.NoSuchProcess:
+        return (pmmusage, time_poll, subproc.wait())
+
+    rcode: int | None = subproc.poll()
+    if rcode is None:
+        try:
+            proc.terminate()
+            rcode = proc.wait(timeout=0.01)
+        except psutil.TimeoutExpired:
+            proc.kill()
+        except psutil.NoSuchProcess:
+            pass
+    return (pmmusage, time_poll, rcode)  # type: ignore rcode is valid at this point.
+
+
+def _extract_test_cases(problem_number: int) -> Testcases | None:
+    """
+    Extracts the related testcases for the given problem number.
+
+    :param problem_number: CSES entry problem number
+    """
+    testcases_path: Path = data.DATA_IO / f"{problem_number}.zip"
+    if not testcases_path.exists():
+        return None
+
+    with zipfile.ZipFile(testcases_path, "r") as archive:
+        namelist: List[str] = archive.namelist()
+        testcases: Testcases = [{} for _ in range(len(namelist) // 2)]
+
+        for member in namelist:
+            path: Path = Path(member)
+            ext: str = path.suffix
+            if ext not in (_TESTCASE_INPUT, _TESTCASE_OUTPUT):  # Invalid file.
+                continue
+            filename: str = path.stem
+            archive_data: str = archive.read(member).decode("utf-8")
+            testcases[int(filename) - 1][ext] = archive_data
+    return testcases
+
+
+# -------------------------------- DEPRECATED -------------------------------- #
+
+
+# NOTE: Deprecated
 def _display_results(
     results: List[Dict[str, str]], manifest_entry: Dict[str, Any]
 ) -> None:
+
     print(f"CSES #{manifest_entry["problem_number"]}: {manifest_entry["title"]}")
 
     total_result: str = ""
@@ -157,44 +297,15 @@ def _display_results(
     pass
 
 
-def _extract_test_cases(index: int) -> List[Dict[str, str]]:
-    """
-    Extracts test-cases from a given archive.
-    These test-cases are assumed to be numbered 1 -> N. And have the extensions
-    .in and .out respectively.
-    """
-    testcases_path: Path = data.DATA_IO / f"{index}.zip"
-    if not testcases_path.exists():
-        raise FileNotFoundError(f"Could not find test-cases for the given problem.")
-    with zipfile.ZipFile(testcases_path, "r") as archive:
-        namelist: List[str] = archive.namelist()
-        testcases: List[Dict[str, str]] = [{} for _ in range(len(namelist) // 2)]
-        for member in namelist:
-            path: Path = Path(member)
-            ext: str = path.suffix
-            if ext not in _IN_OUT_EXTENSIONS:
-                continue
-            filename: str = path.stem
-            match ext:
-                case ".in":
-                    testcases[int(filename) - 1]["in"] = archive.read(member).decode(
-                        "utf-8"
-                    )
-                case ".out":
-                    testcases[int(filename) - 1]["out"] = archive.read(member).decode(
-                        "utf-8"
-                    )
-    return testcases
-
-
+# NOTE: Depracated
 def _create_process_compiled(
     test_in: str, executable: Path, stdout_file
-) -> Tuple[bool, psutil.Process, subprocess.Popen]:
-    executable_proc = subprocess.Popen(
+) -> Tuple[bool, psutil.Process, Popen]:
+    executable_proc = Popen(
         [str(executable)],
-        stdin=subprocess.PIPE,
-        stdout=stdout_file,  
-        stderr=subprocess.PIPE,
+        stdin=PIPE,
+        stdout=stdout_file,
+        stderr=PIPE,
         text=True,  # Text mode for input is fine
     )
     process = psutil.Process(executable_proc.pid)
@@ -208,13 +319,15 @@ def _create_process_compiled(
             return (False, process, executable_proc)
     return (False, process, executable_proc)
 
-# TODO: REFACTOR
+
+# NOTE: Depracated
 def _run_compiled(
     executable: Path, index: int, memory_limit_mb: int, time_limit_s: float
 ) -> List[Dict[str, str]]:
     test_cases = _extract_test_cases(index)
     verdicts = []
-
+    if test_cases is None:
+        return []
     for test_case in test_cases:
         exec_obj = None
 
@@ -252,11 +365,19 @@ def _run_compiled(
                 # Verdict Logic
                 if max_mem > memory_limit_mb:
                     verdicts.append(
-                        {"verdict": "MEMORY LIMIT EXCEEDED", "time": "--", "memory": f"{max_mem:.1f} MB"}
+                        {
+                            "verdict": "MEMORY LIMIT EXCEEDED",
+                            "time": "--",
+                            "memory": f"{max_mem:.1f} MB",
+                        }
                     )
                 elif elapsed > time_limit_s:
                     verdicts.append(
-                        {"verdict": "TIME LIMIT EXCEEDED", "time": "--", "memory": f"{max_mem:.1f} MB"}
+                        {
+                            "verdict": "TIME LIMIT EXCEEDED",
+                            "time": "--",
+                            "memory": f"{max_mem:.1f} MB",
+                        }
                     )
                 elif (rcode or exec_obj.poll()) != 0:
                     verdicts.append(
@@ -307,24 +428,8 @@ def _run_compiled(
     return verdicts
 
 
+# NOTE: Deprecated
 def _run_interpreted(
     executable: Path, index: int, memory_limit_mb: int, time_limit_s: float
 ) -> List[Dict[str, str]]:
     return []
-
-
-def _process_file(
-    file: Path,
-) -> Tuple[Executor, Path]:
-    """
-    Compiles any given source file if it is a compiled language and returns
-    the path to the result or returns the path to the source file as is for
-    interpreted languages. Also returns the specified runner for the executable.
-    """
-
-    if file.suffix in _SUPPORTED_COMPILED_LANGUAGES:
-        return (_run_compiled, _SUPPORTED_COMPILED_LANGUAGES[file.suffix](file))
-    elif file.suffix in _SUPPORTED_INTERPRETED_LANGUAGES:
-        return (_run_interpreted, file)
-    else:
-        raise ValueError(f"{file.suffix} files are not supported.")
