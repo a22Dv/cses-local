@@ -11,6 +11,7 @@ type Parser = ap.ArgumentParser
 type ArgumentNamespace = ap.Namespace
 type _Subparser = ap._SubParsersAction[ap.ArgumentParser]
 
+
 class _HelpFormatter(ap.HelpFormatter):
     """
     Custom help formatter that allows for a customized prefix.
@@ -22,17 +23,19 @@ class _HelpFormatter(ap.HelpFormatter):
             prefix = "Usage: "
         return super().add_usage(usage, actions, groups, prefix)
 
+
 def parse(argparser: Parser | None) -> ArgumentNamespace:
     """
     Returns the given arguments in an argument namespace.
     Handles parser creation if `argparser` is `None`.
-    
+
     :param argparser: Optional parser.
     :return: Argument namespace. Holds given arguments.
     """
-    
+
     parser_obj: Parser = argparser if argparser else parser()
     return parser_obj.parse_args()
+
 
 def parser() -> Parser:
     """
@@ -50,6 +53,7 @@ def parser() -> Parser:
 
     return parser
 
+
 def _add_subparsers(parser: Parser) -> None:
     """
     Adds subparsers to the given subparser.
@@ -64,6 +68,7 @@ def _add_subparsers(parser: Parser) -> None:
     _add_submit(subparsers)
     _add_browse(subparsers)
 
+
 # NOTE: "Previous" is currently not implemented.
 def _add_submit(subparsers: _Subparser) -> None:
     """
@@ -73,7 +78,7 @@ def _add_submit(subparsers: _Subparser) -> None:
     :param subparsers: Subparser to add to.
     """
     parser_submit = subparsers.add_parser(
-        "submit", help="Submit a solution to a testcase."
+        "submit", help="Submit a solution to a testcase (Currently not implemented)."
     )
     parser_submit.add_argument(
         "problem",
@@ -89,8 +94,9 @@ def _add_submit(subparsers: _Subparser) -> None:
         "--online",
         "-o",
         action="store_true",
-        help="Submit online",
+        help="Submit online. (Currently not implemented)",
     )
+
 
 # NOTE: "Previous" is currently not implemented.
 def _add_browse(subparsers: _Subparser) -> None:

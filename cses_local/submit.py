@@ -4,7 +4,6 @@
 #
 # TODO:
 # Support "previous" index.
-# Implement online submissions.
 
 import time
 import psutil
@@ -79,9 +78,12 @@ def submit(index: str, file: str, online: bool) -> None:
         print(f"Submission error: {e}")
 
 
-# TODO
+# TODO:
+# Possible in the near-future if need arises.
+# However, the main use-case for this tool as currently written
+# is as an "offline clone" for CSES.
 def _online_submit(index: int, file: Path) -> None:
-    pass
+    raise NotImplementedError()
 
 
 def _local_submit(file: Path, manifest_entry: Dict[str, Any]) -> None:

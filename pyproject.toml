@@ -11,9 +11,9 @@ dependencies = [
   "colorama",
   "beautifulsoup4",
   "requests",
-  "pywin32",
   "readchar",
-  "psutil"
+  "psutil",
+  "pywin32; sys_platform == 'win32'"
 ]
 
 [project.scripts]

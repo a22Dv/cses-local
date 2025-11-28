@@ -3,3 +3,4 @@
 cses_local/data/
 cses_local.egg-info/
 cses_local/__pycache__/
+build/
