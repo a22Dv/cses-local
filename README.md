@@ -32,7 +32,9 @@ cses
 
 so the program prompts you in order to get the problem set from the website.
 
->[!NOTE] Downloading the required testcases requires you to have an account at cses.fi. You can't proceed with the download without an account as the website blocks it for users who are not logged in.
+>[!NOTE] 
+>Downloading the required testcases requires you to have an account at 
+>cses.fi, As you can't proceed with the download without an account as the ?/>website blocks it for users who are not logged in.
 
 ## License
 This project is licensed under the MIT License - see LICENSE for more details.
